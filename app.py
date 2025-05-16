@@ -81,7 +81,20 @@ def save_tasks(tasks):
 def load_metadata():
     if os.path.exists(VIDEO_META_FILE):
         with open(VIDEO_META_FILE, "r") as f:
-            return json.load(f)
+            metadata = json.load(f)
+
+        # 清理不存在的视频文件对应的元数据
+        updated_metadata = {}
+        for video_id, data in metadata.items():
+            file_path = os.path.join(VIDEO_DIR, data.get("filename", ""))
+            if os.path.exists(file_path):
+                updated_metadata[video_id] = data
+        # 若有改动则保存
+        if updated_metadata != metadata:
+            with open(VIDEO_META_FILE, "w") as f:
+                json.dump(updated_metadata, f, indent=2)
+
+        return updated_metadata
     return {}
 
 def save_metadata(metadata):
@@ -134,7 +147,7 @@ def download_video(video_url, progress_bar, status_placeholder):
 
         # 保存 metadata
         metadata = load_metadata()
-        metadata[video_id] = {"title": title, "filename": f"{video_id}.mp4"}
+        metadata[video_id] = {"title": title, "video_url": video_url ,"filename": f"{video_id}.mp4"}
         save_metadata(metadata)
 
         progress_bar.progress(1.0)
@@ -208,7 +221,7 @@ def render_sidebar(tasks):
             else:
                 st.warning("⚠ 找不到图片文件")
 
-            st.markdown(f"**类别**: {CATEGORY_MAP.get(category, '')}")
+            st.markdown(f"**类别**: {category}")
             st.markdown(f"**说明**: {explanation}")
             st.markdown(f"**视频链接**: {video_url}")
             st.markdown(f"**上传状态**: {'✅ 已上传' if task.get('Uploaded', False) else '❌ 未上传'}")
@@ -230,19 +243,24 @@ def render_sidebar(tasks):
                 st.rerun()
 
 def finalize_save(preview_image_path, video_url, timestamp, category, explanation, tasks):
-    for t in tasks:
-        if t['video_url'] == video_url and t['timestamp'] == timestamp:
-            if not st.session_state.get("force_save"):
-                if st.warning("⚠️ 已存在相同视频链接与时间戳的标注。是否继续保存？"):
-                    if st.button("确认继续保存"):
-                        st.session_state.force_save = True
-                        st.rerun()
-                return
+    # 1. 检查是否存在重复标注
+    duplicate_exists = any(t['video_url'] == video_url and t['timestamp'] == timestamp for t in tasks)
+
+    # 2. 如果有重复并且不是强制保存状态，提示用户确认
+    if duplicate_exists and not st.session_state.get("force_save", False):
+        st.warning("⚠️ 已存在相同视频链接与时间戳的标注。是否继续保存？")
+        if st.button("确认继续保存"):
+            st.session_state.force_save = True
+            st.experimental_rerun()
+        return  # 用户尚未确认，终止函数
+
+    # 3. 执行保存流程
     index = get_next_index(category)
     filename = f"{category}-{index}.jpg"
     final_path = os.path.join(FRAME_DIR, category, filename)
     os.rename(preview_image_path, final_path)
     image_url = f"/data/local-files/?d=frames/{category}/{filename}"
+
     task = {
         "image": image_url,
         "filename": filename,
@@ -255,9 +273,12 @@ def finalize_save(preview_image_path, video_url, timestamp, category, explanatio
 
     tasks.append(task)
     save_tasks(tasks)
+
+    # 4. 重置 session_state 并反馈用户
     st.success(f"已保存: {filename}")
     st.session_state.force_save = False
     st.session_state.tasks = load_tasks()
+
 
 # ----------- Streamlit UI -----------
 st.set_page_config(layout="wide")
@@ -343,6 +364,7 @@ if metadata:
 
     selected_video_id = options[selected_title]
     selected_video_path = os.path.join(VIDEO_DIR, metadata[selected_video_id]["filename"])
+    st.session_state.video_url = metadata[selected_video_id]["video_url"]
     if st.button("加载该视频"):
         st.session_state.video_path = selected_video_path
         
@@ -402,5 +424,12 @@ if st.session_state.video_path:
         st.image(st.session_state.preview_info["path"], caption="截图预览", use_container_width=True)
         if confirm_trigger:
             preview = st.session_state.preview_info
-            finalize_save(preview["path"], st.session_state.video_url, preview["timestamp"], preview["category"], preview["explanation"], st.session_state.tasks)
+            finalize_save(
+                preview_image_path=preview["path"],
+                video_url=st.session_state.video_url,
+                timestamp=preview["timestamp"],
+                category=preview["category"],
+                explanation=preview["explanation"],
+                tasks=st.session_state.tasks
+            )
             st.session_state.preview_ready = False
