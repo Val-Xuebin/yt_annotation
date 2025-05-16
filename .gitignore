@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter/IPython
+.ipynb_checkpoints
+
+# Streamlit cache
+.streamlit/
+
+# Video files
+videos/
+frames/
+
+# User data
+cookies.txt
+upload/
+meta/data.json
+
+# OS files
+.DS_Store
+Thumbs.db
