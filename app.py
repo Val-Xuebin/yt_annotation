@@ -7,17 +7,8 @@ import re
 
 # 键为类别缩写，用于图片命名；值为类别全称，用于类别标注
 CATEGORY_MAP = {
-    "FS": "False Start",
-    "IS": "Illegal Shift",
-    "IM": "Illegal Motion",
-    "IF": "Illegal Formation",
-    "OF": "Offside/Encroachment",
-    "NI": "Neutral Zone Infraction",
-    "EF": "Encroachment",
-    "DG": "Delay of Game",
-    "PI": "Pass Interference",
-    "HF": "Holding (Foul)",
-    "IC": "Illegal Contact"
+    "PF" : 'Personal Foul',
+    "FS" : 'False Start'
 }
 CATEGORIES = list(CATEGORY_MAP.keys())
 
@@ -183,28 +174,54 @@ def get_next_index(category):
 
 def render_sidebar(tasks):
     st.sidebar.header("📑 已保存标注")
-    if st.sidebar.button("🔄 刷新"):
+    col_btn1, col_btn2 = st.sidebar.columns([1, 2])
+
+    if col_btn1.button("🔄 刷新"):
         st.session_state.tasks = load_tasks()
 
-    if st.sidebar.button("📤 Export 未上传标注"):
+    if col_btn2.button("📤 Export 未上传标注"):
         export_dir = os.path.join(BASE_DIR, "meta/upload")
         os.makedirs(export_dir, exist_ok=True)
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         export_path = os.path.join(export_dir, f"export_{timestamp_str}.json")
 
-        export_data = [t for t in st.session_state.tasks if not t.get("Uploaded", False)]
+        export_data = [t.copy() for t in st.session_state.tasks if not t.get("Uploaded", False)]
+
         if export_data:
-            # 设置为已上传
             for t in export_data:
                 t["Uploaded"] = True
+            for t in st.session_state.tasks:
+                if not t.get("Uploaded", False):
+                    t["Uploaded"] = True
             save_tasks(st.session_state.tasks)
+
+            if not include_explanation:
+                for t in export_data:
+                    t.pop("explanation", None)
+
             with open(export_path, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
+
             st.sidebar.success(f"✅ 导出成功，共 {len(export_data)} 条，文件: {export_path}")
         else:
             st.sidebar.info("没有需要导出的标注")
 
-    for i, task in enumerate(st.session_state.tasks):
+
+    include_explanation = st.sidebar.checkbox("导出时包含说明", value=True)
+
+    # ------------------------- #
+    # 展示标注任务（逆序+筛选）  #
+    # ------------------------- #
+
+    # 筛选上传状态
+    show_only_unuploaded = st.sidebar.checkbox("仅显示未上传标注", value=False)
+    tasks_to_display = reversed(st.session_state.tasks)  # 逆序展示（新在上）
+
+    for i_display, task in enumerate(tasks_to_display):
+        # 过滤：只显示未上传项
+        if show_only_unuploaded and task.get("Uploaded", False):
+            continue
+
         timestamp = task.get("timestamp", "未知时间")
         image_path = task.get("image", "")
         filename = task.get("filename", os.path.basename(image_path.split("?d=")[-1]))
@@ -212,9 +229,10 @@ def render_sidebar(tasks):
         explanation = task.get("explanation", "")
         video_url = task.get("video_url", "")
 
+        i = st.session_state.tasks.index(task)  # 从原始列表中查出真实索引（用于修改/删除）
+
         expander_title = f"{timestamp} - {filename}"
         with st.sidebar.expander(expander_title):
-            # 图片路径安全拼接
             image_local_path = os.path.join(BASE_DIR, image_path.split("?d=")[-1]) if image_path else ""
             if os.path.exists(image_local_path):
                 st.image(image_local_path, caption=filename, use_container_width=True)
@@ -226,21 +244,34 @@ def render_sidebar(tasks):
             st.markdown(f"**视频链接**: {video_url}")
             st.markdown(f"**上传状态**: {'✅ 已上传' if task.get('Uploaded', False) else '❌ 未上传'}")
 
-            col1, _ = st.columns(2)
+            col1, col2 = st.columns(2)
             if col1.button("🗑 删除", key=f"delete_{i}"):
                 try:
-                    # 删除图片文件
-                    category_folder = os.path.join(FRAME_DIR, category)
-                    image_file_path = os.path.join(category_folder, filename)
+                    image_file_path = os.path.join(FRAME_DIR, category, filename)
                     if os.path.exists(image_file_path):
                         os.remove(image_file_path)
                 except Exception as e:
                     st.error(f"删除图片出错: {e}")
 
-                # 删除任务记录
                 st.session_state.tasks.pop(i)
                 save_tasks(st.session_state.tasks)
                 st.rerun()
+
+            if col2.button("✏ 修改说明", key=f"edit_{i}"):
+                st.session_state.edit_index = i
+                st.rerun()
+
+            if "edit_index" in st.session_state and st.session_state.edit_index == i:
+                current_explanation = st.session_state.tasks[i].get("explanation", "")
+                new_explanation = st.text_area("请输入新的说明：", value=current_explanation, key=f"ex_input_{i}")
+                if st.button("✅ 保存修改", key=f"save_edit_{i}"):
+                    st.session_state.tasks[i]["explanation"] = new_explanation
+                    st.session_state.tasks[i]["Uploaded"] = False  # 修改说明后上传状态设为 False
+                    save_tasks(st.session_state.tasks)
+                    st.success("说明已更新！")
+                    del st.session_state.edit_index
+                    st.rerun()
+
 
 def finalize_save(preview_image_path, video_url, timestamp, category, explanation, tasks):
     # 1. 检查是否存在重复标注
